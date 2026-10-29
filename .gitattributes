@@ -1,0 +1,2 @@
+# Keep shipped dependency files byte-identical on clone and checkout.
+* -text

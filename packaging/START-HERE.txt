@@ -1,0 +1,63 @@
+SPOTIFY PITCH, TEMPO & FX - SETUP 1.0.0 (protocol 3)
+
+KEEP / SHARE
+Keep Spotify-Pitch-Tempo-FX-Setup.exe on a USB drive or cloud backup.
+Send that file to friends. It contains the helper, effects, Spicetify 2.46.4,
+licenses and Spicetify source. No compiler, Python, Node or admin rights needed.
+It contains no Spotify account data, login tokens, music or Spotify binaries.
+Each new installation generates its own private local-connection token.
+
+INSTALL OR REPAIR
+1. Use Windows 10/11 x64 (Intel/AMD) and desktop Spotify from spotify.com.
+2. Open Spotify once, sign in, then quit it completely, including its tray icon.
+3. Double-click Spotify-Pitch-Tempo-FX-Setup.exe normally, not as administrator.
+4. Click Install / Repair. Wait for SUCCESS.
+5. Open the desktop shortcut: Spotify + Pitch & Tempo.
+6. Press play. Click the sliders icon at the right of Spotify's playback bar.
+   The panel is called Pitch, Tempo & FX. Turn Enable on to use the effects.
+
+IMPORTANT VERSION LIMIT
+This release supports ONLY desktop x64 Spotify 1.3.6.1921, verified by exact
+Spotify.exe/Spotify.dll hashes. Microsoft Store, 32-bit and ARM builds are not
+supported. Setup stops before modifying an incompatible Spotify installation.
+Spotify may install a newer version after a Windows reinstall or auto-update.
+That requires an updated FX backend/setup; rerunning this file does not make
+a different Spotify build compatible. The setup does not install/downgrade
+Spotify or block its updates. Keep this README and the source backup too.
+
+CONTROLS
+Tempo: 0.50x to 1.50x. Pitch: -12 to +12 semitones.
+Link pitch to tempo: slowed/nightcore. Unlink for independent control.
+Reverb, Distortion, Muffle: separate 0-100% Amount sliders; 0% is off.
+Reset all & bypass returns original audio. Scroll down if reset is out of view.
+Every launch starts bypassed. The panel reports applying/accepted/paused/fault;
+it does not claim a slider request reached audio until the backend accepts it.
+Audio processing is confined to Spotify. Other applications are not processed.
+
+REMOVE
+Quit Spotify. Run this Setup.exe and click Remove, or use Start menu >
+Spotify Pitch Tempo FX > Remove Pitch Tempo FX.
+The installed copy also has Remove.cmd in %LOCALAPPDATA%\SpotifyPitchTempo.
+Other Spicetify customizations and local backups are preserved.
+
+FILES / RECOVERY
+Helper and private Spicetify CLI: %LOCALAPPDATA%\SpotifyPitchTempo
+Extension/configuration: %APPDATA%\spicetify
+Backups before install/remove: %LOCALAPPDATA%\SpotifyPitchTempo-backups
+Setup logs: %LOCALAPPDATA%\SpotifyPitchTempo-setup-logs
+An unsuccessful apply automatically restores the pre-operation snapshot.
+Do not share your installed folder or backups: they contain your private token
+and local configuration. Share the clean Setup.exe instead.
+
+If Spotify was launched normally, quit it and use the supplied desktop shortcut.
+If a supported installation has broken UI/customizations, repair/restore its
+Spicetify UI first. Custom SPICETIFY_CONFIG/STATE locations and junction-based
+asset folders are not supported by this installer.
+
+VERIFICATION / LIMITS
+This release was tested on the development PC with 44.1 kHz stereo output.
+Other audio drivers still need a playback check; Client3 tempo is unsupported.
+Independent pitch adds about 150 ms / tempo latency; distortion adds 32 frames.
+Eight retained render streams maximum; restart Spotify if the panel requests it.
+No cross-PC or fresh-Windows live playback claim is made by the installer.
+Third-party notices and license texts are included alongside these instructions.

@@ -1,0 +1,15 @@
+/build/
+/dist/
+/originals/
+/working/
+/reports/
+/checkpoints/
+bridge-token.txt
+installation.json
+.env
+.env.*
+*.obj
+*.pdb
+*.ilk
+*.pyc
+__pycache__/
