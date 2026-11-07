@@ -1,4 +1,4 @@
-param([string]$Version='1.0.0-fx3', [string]$OutputDirectory)
+﻿param([string]$Version='1.0.0-fx3', [string]$OutputDirectory)
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
 if (!$OutputDirectory) { $OutputDirectory=Join-Path $root "dist\$Version" }
@@ -27,7 +27,7 @@ try {
     $files=@(Get-ChildItem -LiteralPath $payload -Recurse -File | Sort-Object FullName | ForEach-Object {
         [pscustomobject]@{path=$_.FullName.Substring($payload.Length+1);sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
     })
-    [pscustomobject]@{release=$Version;protocol=3;spotifyVersion='1.3.6.1921';spotifyDllSha256='93BA5EE486E148114A1D6DB388CCE318B04D2A011376FF6301F5EE0DEA432A12';files=$files} |
+    [pscustomobject]@{release=$Version;protocol=4;spotifyVersion='1.3.8.620';spotifyDllSha256='769AC5A1A282F470B663A1C3933774F56D954F8F0DBFD156F9D799A173C79406';files=$files} |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $payload 'manifest.json') -Encoding UTF8
     Import-Module (Join-Path $root 'packaging\installer.psm1') -Force -DisableNameChecking
     Test-SptPayload $payload

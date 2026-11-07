@@ -44,7 +44,9 @@ $Script
 } finally { Stop-Transcript | Out-Null }
 "@
     [IO.File]::WriteAllText($path,$wrapped)
-    & (Join-Path $root 'build\launch-user.exe') "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $path
+    $elevated=(New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if ($elevated) { & (Join-Path $root 'build\launch-user.exe') "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $path }
+    else { Start-Process -FilePath "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$path+'"')) -WindowStyle Hidden | Out-Null }
     # launch-user returns a detached PID; wait for the explicit result, bounded.
     $deadline=(Get-Date).AddMinutes(3)
     while (!(Test-Path -LiteralPath $result) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
@@ -78,7 +80,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $real.Spotify $name) -Destination (Join-Path $context.Spotify $name)
     }
     Copy-Item -Path (Join-Path $real.Config 'Backup\*.spa') -Destination (Join-Path $context.Spotify 'Apps')
-    [IO.File]::WriteAllText((Join-Path $context.Spotify 'prefs'),'app.last-launched-version="1.3.6.1921.g7086c071a617"')
+    [IO.File]::WriteAllText((Join-Path $context.Spotify 'prefs'),'app.last-launched-version="1.3.8.620.g39b276d5d7ac"')
     $prefix=@"
 Import-Module '$($payload.Replace("'","''"))\installer.psm1' -Force -DisableNameChecking
 `$c=Get-Content -LiteralPath '$($contextPath.Replace("'","''"))' -Raw | ConvertFrom-Json
@@ -138,7 +140,7 @@ Invoke-SptUninstall $c
 '@) 'remove'
     Check 'uninstall removes helper and injected UI reference' (!(Test-Path -LiteralPath (Join-Path $context.Install 'SpotifyPitchTempo.exe')) -and !([IO.File]::ReadAllText((Join-Path $context.Spotify 'Apps\xpui\index.html')).Contains('pitch-tempo.js')))
     Check 'uninstall preserves other extensions' ((Test-Path -LiteralPath (Join-Path $context.Config 'Extensions\test-other.js')) -and (Get-SptIniValue (Join-Path $context.Config 'config-xpui.ini') 'AdditionalOptions' 'extensions') -eq 'test-other.js')
-    Check 'uninstall preserves Spotify native files' ((Get-FileHash -LiteralPath (Join-Path $context.Spotify 'Spotify.dll') -Algorithm SHA256).Hash -eq '93BA5EE486E148114A1D6DB388CCE318B04D2A011376FF6301F5EE0DEA432A12')
+    Check 'uninstall preserves Spotify native files' ((Get-FileHash -LiteralPath (Join-Path $context.Spotify 'Spotify.dll') -Algorithm SHA256).Hash -eq '769AC5A1A282F470B663A1C3933774F56D954F8F0DBFD156F9D799A173C79406')
     RunNormal ($prefix+"`nInvoke-SptInstall `$c '$($payload.Replace("'","''"))'") 'reinstall-with-other-extension'
     Check 'install preserves existing extension configuration and deploys it' ((Get-SptIniValue (Join-Path $context.Config 'config-xpui.ini') 'AdditionalOptions' 'extensions').Contains('test-other.js') -and [IO.File]::ReadAllText((Join-Path $context.Spotify 'Apps\xpui\index.html')).Contains('test-other.js'))
     $beforeRemove=TreeHash (Get-SptTouchedPaths $context)

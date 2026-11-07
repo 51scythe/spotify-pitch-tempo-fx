@@ -48,7 +48,7 @@ bool supportedBuild() {
     if (hash) CryptDestroyHash(hash);
     if (provider) CryptReleaseContext(provider, 0);
     CloseHandle(file);
-    return ok && text == "93ba5ee486e148114a1d6db388cce318b04d2a011376ff6301f5ee0dea432a12";
+    return ok && text == "769ac5a1a282f470b663a1c3933774f56d954f8f0dbfd156f9d799a173c79406";
 }
 
 std::wstring exeDirectory() {
@@ -104,7 +104,7 @@ bool openMapping(DWORD pid) {
 bool inject(DWORD pid) {
     if (!exactSpotifyPath(pid)) { notice = L"Refused: process is not the installed Spotify.exe."; return false; }
     if (openMapping(pid) && shared->attached) return true;
-    if (!supportedBuild()) { notice = L"This backend supports Spotify 1.3.6.1921 only. The installed Spotify.dll differs; update the backend before attaching."; return false; }
+    if (!supportedBuild()) { notice = L"This backend supports Spotify 1.3.8.620 only. The installed Spotify.dll differs; update the backend before attaching."; return false; }
     std::wstring dll = exeDirectory() + L"\\spotify-pitch-tempo.dll";
     if (GetFileAttributesW(dll.c_str()) == INVALID_FILE_ATTRIBUTES) { notice = L"Native DLL is missing beside this controller."; return false; }
     HANDLE process = OpenProcess(PROCESS_CREATE_THREAD|PROCESS_QUERY_INFORMATION|PROCESS_VM_OPERATION|PROCESS_VM_WRITE|PROCESS_VM_READ, FALSE, pid);
@@ -195,7 +195,8 @@ void updateStatus() {
     shared->heartbeat = LONG(GetTickCount());
     Settings incoming = readSettings(shared);
     if (incoming.tempo != settings.tempo || incoming.pitch != settings.pitch || incoming.linked != settings.linked || incoming.enabled != settings.enabled ||
-        incoming.reverb!=settings.reverb || incoming.distortion!=settings.distortion || incoming.muffle!=settings.muffle) {
+        incoming.reverb!=settings.reverb || incoming.distortion!=settings.distortion || incoming.muffle!=settings.muffle ||
+        incoming.bass!=settings.bass || incoming.pan!=settings.pan || incoming.panSpeed!=settings.panSpeed || incoming.spatial!=settings.spatial) {
         settings = incoming; syncControls();
     }
     wchar_t text[1200];
@@ -273,14 +274,17 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             "\"frames\":%ld,\"buffers\":%ld,\"dspLatency\":%ld,\"processingErrors\":%ld,\"lastError\":%ld,"
             "\"commandSequence\":%ld,\"appliedSequence\":%ld,\"transitioning\":%ld,\"allApplied\":%ld,"
             "\"bypassConfirmed\":%ld,\"faulted\":%ld,\"capacityReached\":%ld,\"streams\":%ld,\"untracked\":%ld,"
-            "\"init3Calls\":%ld,\"silentBuffers\":%ld,\"protocol\":3,"
-            "\"reverb\":%ld,\"distortion\":%ld,\"muffle\":%ld,\"appliedReverb\":%ld,\"appliedDistortion\":%ld,\"appliedMuffle\":%ld,\"fxLatency\":%ld,\"fxFrames\":%ld}",
+            "\"init3Calls\":%ld,\"silentBuffers\":%ld,\"protocol\":4,"
+            "\"reverb\":%ld,\"distortion\":%ld,\"muffle\":%ld,\"appliedReverb\":%ld,\"appliedDistortion\":%ld,\"appliedMuffle\":%ld,\"fxLatency\":%ld,\"fxFrames\":%ld,"
+            "\"bass\":%ld,\"pan\":%ld,\"panSpeed\":%ld,\"spatial\":%ld,"
+            "\"appliedBass\":%ld,\"appliedPan\":%ld,\"appliedPanSpeed\":%ld,\"appliedSpatial\":%ld}",
             spotifyPid,c.tempo,c.pitch,c.linked,c.enabled,shared->attached,t->active,t->rateSupported,
             t->formatSupported,t->appliedTempo,t->appliedPitch,t->sampleRate,t->channels,
             t->frames,t->buffers,t->dspLatency,t->processingErrors,t->lastError,
             shared->sequence,t->appliedSequence,t->transitioning,t->allApplied,t->bypassConfirmed,t->faulted,
             t->capacityReached,t->streams,t->untracked,t->init3Calls,t->silentBuffers,
-            c.reverb,c.distortion,c.muffle,t->appliedReverb,t->appliedDistortion,t->appliedMuffle,t->fxLatency,t->fxFrames);
+            c.reverb,c.distortion,c.muffle,t->appliedReverb,t->appliedDistortion,t->appliedMuffle,t->fxLatency,t->fxFrames,
+            c.bass,c.pan,c.panSpeed,c.spatial,t->appliedBass,t->appliedPan,t->appliedPanSpeed,t->appliedSpatial);
         request->json=json;return 0;
     }
     case WM_HSCROLL: pushControls(); return 0;

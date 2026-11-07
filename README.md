@@ -1,14 +1,14 @@
 # Spotify Pitch, Tempo & FX
 
 Spotify-only pitch, tempo, reverb, distortion and muffle controls for **desktop
-Spotify 1.3.6.1921 on Windows 10/11 x64 (Intel/AMD)**.
+Spotify 1.3.8.620 on Windows 10/11 x64 (Intel/AMD)**.
 
 This repository contains the native helper, process-local audio backend, Spicetify
 extension, self-contained installer source, and pinned third-party dependencies.
 
 ## Compatibility
 
-**This release supports one exact Spotify build: 1.3.6.1921.** Setup verifies both
+**This release supports one exact Spotify build: 1.3.8.620.** Setup verifies both
 Spotify.exe and Spotify.dll hashes before installation. Microsoft Store, ARM,
 32-bit and newer/different Spotify builds are unsupported. A Spotify update needs
 an updated and revalidated audio backend; rebuilding this source alone does not
@@ -46,7 +46,7 @@ cmd /c scripts\build.cmd
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1
 ```
 
-Output: **`dist/1.0.0-fx3/Spotify-Pitch-Tempo-FX-Setup.exe`**, instructions,
+Output: **`dist/1.3.1/Spotify-Pitch-Tempo-FX-Setup.exe`**, instructions,
 checksums, and a source/rebuild ZIP. Packaging uses Windows PowerShell and the
 built-in .NET Framework C# compiler. Recipients do not need a compiler, Python,
 Node, administrator rights or separate Spicetify installation.
@@ -108,7 +108,7 @@ Additional developer checks:
 
 ```powershell
 node --check src\pitch-tempo.js
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-package.ps1 -SetupExe dist\1.0.0-fx3\Spotify-Pitch-Tempo-FX-Setup.exe
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-package.ps1 -SetupExe dist\1.3.1\Spotify-Pitch-Tempo-FX-Setup.exe
 ```
 
 The package integration test requires a local supported Spotify installation,

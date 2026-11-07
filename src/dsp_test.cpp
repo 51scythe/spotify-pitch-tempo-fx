@@ -28,12 +28,15 @@ int main() {
     for(int i=0;i<frames;++i) { source[i*2]=float(.2*std::sin(2*3.141592653589793*440*i/rate)); source[i*2+1]=float(.15*std::sin(2*3.141592653589793*660*i/rate)); }
     int failures=0;
     auto start=std::chrono::steady_clock::now();
-    for(auto c: {spt::Settings{1000,0,0,1},spt::Settings{850,0,0,1},spt::Settings{850,-200,0,1},spt::Settings{1250,700,0,1},spt::Settings{1250,0,1,1}}) {
-        double tempo=c.tempo/1000.0;
-        double factor=spt::pitchFactor(c,tempo);
+    struct Case { spt::Settings c; double clock; };
+    // clock<tempo: governor holds the stream clock below a linked request.
+    for(auto [c,clock]: {Case{{1000,0,0,1},1},Case{{850,0,0,1},.85},Case{{850,-200,0,1},.85},Case{{1250,700,0,1},1.25},
+            Case{{1250,0,1,1},1.25},Case{{1500,0,1,1},1.12},Case{{1200,0,1,1},1.04}}) {
+        double tempo=clock;
+        double factor=spt::pitchFactor(c,clock);
         auto audio=source; spt::PitchProcessor dsp;dsp.configure(2,rate,32,true);
         for(int pos=0;pos<frames;pos+=480) dsp.process(reinterpret_cast<uint8_t*>(audio.data()+pos*2),480,factor);
-        double expected=440*(c.linked?tempo:std::pow(2.0,c.pitch/1200.0));
+        double expected=440*(c.linked?c.tempo/1000.0:std::pow(2.0,c.pitch/1200.0));
         double measured=estimate(audio,rate*tempo,expected);
         bool finite=true;for(float x:audio) if(!std::isfinite(x)||std::abs(x)>1)finite=false;
         bool exact=(factor!=1)||!std::memcmp(audio.data(),source.data(),source.size()*sizeof(float));

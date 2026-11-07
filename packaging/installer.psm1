@@ -1,7 +1,7 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$script:SpotifyHash = '93BA5EE486E148114A1D6DB388CCE318B04D2A011376FF6301F5EE0DEA432A12'
-$script:ExeHash = '638F9266A5D387204DBB9DADA2820F22ACA3848B496A0363535210EA21BB1A3F'
+$script:SpotifyHash = '769AC5A1A282F470B663A1C3933774F56D954F8F0DBFD156F9D799A173C79406'
+$script:ExeHash = 'D3871B833E6A54382CA500B316D14B83B22B8EE16B594E8414E3F2C2DFC1A541'
 
 function Get-SptContext {
     [pscustomobject]@{
@@ -56,19 +56,19 @@ function Assert-SptSpotify($Context) {
     $exeHash = (Get-FileHash -LiteralPath (Join-Path $Context.Spotify 'Spotify.exe') -Algorithm SHA256).Hash
     if ($hash -ne $script:SpotifyHash -or $exeHash -ne $script:ExeHash) {
         $version = (Get-Item -LiteralPath (Join-Path $Context.Spotify 'Spotify.exe')).VersionInfo.ProductVersion
-        throw "Unsupported Spotify build ($version). This setup supports only desktop x64 Spotify 1.3.6.1921. Obtain an updated FX setup for your Spotify version. No installation changes were made."
+        throw "Unsupported Spotify build ($version). This setup supports only desktop x64 Spotify 1.3.8.620. Obtain an updated FX setup for your Spotify version. No installation changes were made."
     }
     if (!(Test-Path -LiteralPath (Join-Path $Context.Spotify 'Apps') -PathType Container)) { throw 'Spotify UI assets are missing. Repair Spotify first.' }
     $version = Get-SptIniValue (Join-Path $Context.Spotify 'prefs') '' 'app.last-launched-version'
-    if (!$version.StartsWith('1.3.6.1921')) { throw 'Open the supported Spotify build once, sign in, then quit it and retry setup.' }
-    Write-Output 'Compatible: Spotify 1.3.6.1921 x64 (native EXE and DLL hashes verified).'
+    if (!$version.StartsWith('1.3.8.620')) { throw 'Open the supported Spotify build once, sign in, then quit it and retry setup.' }
+    Write-Output 'Compatible: Spotify 1.3.8.620 x64 (native EXE and DLL hashes verified).'
 }
 
 function Test-SptPayload($Payload) {
     $manifestPath = Join-Path $Payload 'manifest.json'
     if (!(Test-Path -LiteralPath $manifestPath)) { throw 'Setup payload is incomplete. Extract/download the complete package again.' }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    if ($manifest.protocol -ne 3 -or $manifest.spotifyDllSha256 -ne $script:SpotifyHash) { throw 'Unsupported setup manifest.' }
+    if ($manifest.protocol -ne 4 -or $manifest.spotifyDllSha256 -ne $script:SpotifyHash) { throw 'Unsupported setup manifest.' }
     $base = [IO.Path]::GetFullPath($Payload).TrimEnd('\') + '\'
     $seen = @{}
     foreach ($entry in $manifest.files) {
@@ -224,7 +224,7 @@ function Invoke-SptInstall($Context, $Payload) {
         New-SptShortcut (Join-Path $Context.Desktop 'Spotify + Pitch & Tempo.lnk') $helper '--launch --background' $Context.Install $icon
         New-SptShortcut (Join-Path $Context.Programs 'Spotify + Pitch & Tempo.lnk') $helper '--launch --background' $Context.Install $icon
         New-SptShortcut (Join-Path $Context.Programs 'Remove Pitch Tempo FX.lnk') (Join-Path $Context.Install 'Remove.cmd') '' $Context.Install $icon
-        [pscustomobject]@{release='1.0.0-fx3';protocol=3;backup=$backup;installed=(Get-Date).ToString('o')} |
+        [pscustomobject]@{release='1.3.1';protocol=4;backup=$backup;installed=(Get-Date).ToString('o')} |
             ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Context.Install 'installation.json') -Encoding UTF8
         Write-Output 'SUCCESS: installed. Open Spotify + Pitch & Tempo from your desktop, press play, then open the sliders icon. Effects start off.'
     } catch {

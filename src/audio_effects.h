@@ -99,14 +99,18 @@ class Room {
     std::array<Delay,8> tank_;
     std::array<Delay,4> diffusion_;
     std::array<Delay,2> pre_;
-    std::array<float,8> damp_{},phase_{},length_{},gain_{},increment_{};
+    std::array<float,8> damp_{},phase_{},length_{},target_{},increment_{};
+    float decayPerSample_=0; // ln(gain) per sample of loop delay: RT60 tracks the gliding size
     std::array<float,2> inputLow_{};
-    bool inputPrimed_=false;
-    float lowPole_=0, highPole_=0, preDelay_=1, sampleRate_=48000;
+    bool inputPrimed_=false, snap_=true;
+    float lowPole_=0, highPole_=0, preDelay_=1, preTarget_=1, sampleRate_=48000;
     static constexpr std::array<float,8> seconds_={.0297f,.0371f,.0411f,.0437f,.0531f,.0593f,.0677f,.0739f};
+    // Room size and pre-delay glide at <=0.3% per sample (~5 cents) so moving
+    // the slider grows the hall instead of bending the tail's pitch.
+    static constexpr float slew_=.006f, maxSize_=1.8f;
 public:
     void configure(float maxRate) {
-        for(auto& d:tank_) d.configure(int(maxRate*.09f));
+        for(auto& d:tank_) d.configure(int(maxRate*.0739f*maxSize_)+int(maxRate*.002f));
         for(auto& d:diffusion_) d.configure(int(maxRate*.018f));
         for(auto& d:pre_) d.configure(int(maxRate*.06f));
         reset();
@@ -115,26 +119,32 @@ public:
         for(auto& d:tank_) d.reset();
         for(auto& d:diffusion_) d.reset();
         for(auto& d:pre_) d.reset();
-        damp_={}; inputLow_={}; inputPrimed_=false;
+        damp_={}; inputLow_={}; inputPrimed_=false; snap_=true;
         for(int i=0;i<8;++i) phase_[i]=i*.73f;
     }
-    void tune(float rate,float amount) {
+    // Larger amounts are a larger, farther hall: longer lines and pre-delay.
+    // sizeAmount is the slider destination, so enabling starts at the final size.
+    void tune(float rate,float amount,float sizeAmount) {
         sampleRate_=rate;
         lowPole_=std::exp(-2*pi*(6500-2500*amount)/rate);
         highPole_=std::exp(-2*pi*160/rate);
-        preDelay_=.022f*rate;
+        float size=1+(maxSize_-1)*sizeAmount;
+        preTarget_=(.022f+.023f*sizeAmount)*rate;
         float decay=1.2f+2.2f*amount;
+        decayPerSample_=-3*std::log(10.f)/(decay*rate);
         for(int i=0;i<8;++i) {
-            length_[i]=seconds_[i]*rate;
-            gain_[i]=std::pow(10.f,-3*seconds_[i]/decay);
+            target_[i]=seconds_[i]*size*rate;
             increment_[i]=2*pi*(.11f+.017f*i)/rate;
         }
+        if(snap_) { length_=target_; preDelay_=preTarget_; snap_=false; }
     }
     std::array<float,2> process(float left,float right) {
         std::array<float,2> input={left,right}, early{};
         // Prime the DC blocker on entry so enabling a room on a biased signal
         // cannot manufacture a bass transient and repeat it as early reflections.
         if(!inputPrimed_) { inputLow_=input; inputPrimed_=true; }
+        preDelay_+=std::clamp(preTarget_-preDelay_,-slew_,slew_);
+        for(int i=0;i<8;++i) length_[i]+=std::clamp(target_[i]-length_[i],-slew_,slew_);
         for(int c=0;c<2;++c) early[c]=.22f*pre_[c].read(sampleRate_*(c ? .0137f:.0113f))+
             .15f*pre_[1-c].read(sampleRate_*(c ? .0311f:.0277f));
         for(int c=0;c<2;++c) {
@@ -158,9 +168,85 @@ public:
             for(int j=0;j<span;++j) { float a=feedback[base+j],b=feedback[base+j+span]; feedback[base+j]=a+b; feedback[base+j+span]=a-b; }
         for(int i=0;i<8;++i) {
             float injection=input[i&1]*((i&2) ? -.35355339f:.35355339f);
-            tank_[i].write(injection+feedback[i]*.35355339f*gain_[i]);
+            tank_[i].write(injection+feedback[i]*.35355339f*std::exp(decayPerSample_*length_[i]));
         }
         return {l+early[0],r+early[1]};
+    }
+};
+
+struct OnePole {
+    float z=0;
+    float process(float x,float pole) { z=clean(x+pole*(z-x)); return z; }
+};
+// At or above 18 kHz the filter is a pass-through rather than a mild treble cut.
+inline float onePole(float hz,float rate) { return hz>=18000 ? 0.f : std::exp(-2*pi*std::min(hz,rate*.45f)/rate); }
+
+// RBJ low shelf (slope 1), transposed direct form II. Coefficients change only
+// at control rate along a 40 ms ramp, well inside this form's stable region.
+struct LowShelf {
+    float b0=1,b1=0,b2=0,a1=0,a2=0,z1=0,z2=0;
+    void tune(float hz,float db,float rate) {
+        float A=std::pow(10.f,db/40),w=2*pi*hz/rate,cs=std::cos(w),sq=std::sqrt(A)*std::sin(w)*1.41421356f;
+        float a0=(A+1)+(A-1)*cs+sq;
+        b0=A*((A+1)-(A-1)*cs+sq)/a0; b1=2*A*((A-1)-(A+1)*cs)/a0; b2=A*((A+1)-(A-1)*cs-sq)/a0;
+        a1=-2*((A-1)+(A+1)*cs)/a0; a2=((A+1)+(A-1)*cs-sq)/a0;
+    }
+    float process(float x) { float y=b0*x+z1; z1=clean(b1*x-a1*y+z2); z2=clean(b2*x-a2*y); return y; }
+};
+
+// 8D: the song's centre circles the head. Level (equal power, at most +-0.7),
+// interaural delay to 0.6 ms and head shadow to 2.5 kHz on the far ear, and
+// darkening behind the listener. The original side content stays, narrowed.
+class Orbit {
+    std::array<Delay,2> delay_;
+    std::array<OnePole,2> shade_{};
+    std::array<float,2> gain_{1,1},delayed_{1,1},pole_{};
+    float phase_=0;
+    bool primed_=false;
+public:
+    void configure(float maxRate) { for(auto& d:delay_) d.configure(int(maxRate*.002f)); reset(); }
+    void reset() { for(auto& d:delay_) d.reset(); shade_={}; phase_=0; primed_=false; }
+    void tune(float amount,float lapSeconds,float rate,int samples) {
+        phase_+=2*pi*samples/(lapSeconds*rate); if(phase_>2*pi) phase_-=2*pi;
+        float side=std::sin(phase_)*amount, back=std::max(0.f,-std::cos(phase_))*amount; // side>0: right
+        float angle=(.7f*side+1)*pi/4;
+        gain_={std::cos(angle)*1.41421356f,std::sin(angle)*1.41421356f};
+        float lateral=std::abs(side), rear=20000*std::pow(.4f,back); // windows.h reserves "far"
+        float shadow=std::min(rear,20000*std::pow(.125f,lateral));
+        int farEar=side>0 ? 0:1;
+        delayed_[farEar]=1+.0006f*lateral*rate; delayed_[1-farEar]=1;
+        pole_[farEar]=onePole(shadow,rate); pole_[1-farEar]=onePole(rear,rate);
+    }
+    std::array<float,2> process(float l,float r,float amount) {
+        float mid=(l+r)*.5f, side=(l-r)*.5f*(1-.6f*amount);
+        if(!primed_) { // start from the current level: no onset step
+            for(auto& d:delay_) std::fill(d.data.begin(),d.data.end(),mid);
+            for(auto& s:shade_) s.z=mid;
+            primed_=true;
+        }
+        delay_[0].write(mid); delay_[1].write(mid);
+        float left=shade_[0].process(delay_[0].read(delayed_[0]),pole_[0])*gain_[0];
+        float right=shade_[1].process(delay_[1].read(delayed_[1]),pole_[1])*gain_[1];
+        return {left+side,right-side};
+    }
+};
+
+// Headphone 3D: the left/right channels become two speakers in front (about
+// +-30 degrees). Each ear also hears the other speaker 0.27 ms later through a
+// 700 Hz head-shadow low-pass, -4.4 dB at full amount. Each ear subtracts the
+// same delayed low-pass of its own channel that it adds from the other, so a
+// centred (mono) signal passes exactly unchanged at every frequency.
+class Crossfeed {
+    std::array<Delay,2> delay_;
+    std::array<OnePole,2> shadow_{};
+public:
+    void configure(float maxRate) { for(auto& d:delay_) d.configure(int(maxRate*.002f)); reset(); }
+    void reset() { for(auto& d:delay_) d.reset(); shadow_={}; }
+    std::array<float,2> process(float l,float r,float amount,float pole,float itd) {
+        float g=.6f*amount, norm=1/(1+g);
+        delay_[0].write(l); delay_[1].write(r);
+        float shadedL=shadow_[0].process(delay_[0].read(itd),pole), shadedR=shadow_[1].process(delay_[1].read(itd),pole);
+        return {(l*(1+g)-g*shadedL+g*shadedR)*norm,(r*(1+g)-g*shadedR+g*shadedL)*norm};
     }
 };
 }
@@ -168,39 +254,55 @@ public:
 class AudioEffects {
     int channels_=0,bits_=0,controlCounter_=0;
     float baseRate_=48000,rate_=48000;
-    fx::Ramp reverb_,distortion_,muffle_,rateRamp_;
+    fx::Ramp reverb_,distortion_,muffle_,bass_,pan_,spatial_,rateRamp_;
     fx::Saturator saturator_;
     std::array<fx::Room,4> rooms_;
+    std::array<fx::Orbit,4> orbits_;
+    std::array<fx::Crossfeed,4> crossfeeds_;
     std::array<std::array<fx::LowPass,2>,8> lowpass_{};
-    bool distortionRunning_=false,reverbRunning_=false,muffleRunning_=false;
+    std::array<fx::LowShelf,8> shelves_{};
+    bool distortionRunning_=false,reverbRunning_=false,muffleRunning_=false,bassRunning_=false,panRunning_=false,spatialRunning_=false;
     int saturationWarmup_=0;
     float distortionBlend_=0;
-    float drive_=1,compensation_=1,dcPole_=0,cutoffG_=1;
-    uint32_t requested_=0;
+    float drive_=1,compensation_=1,dcPole_=0,cutoffG_=1,bassTrim_=1,crossPole_=0,crossDelay_=1,lapSeconds_=11;
+    uint64_t requested_=0;
+    int pairs() const { return channels_/2; } // 8D and 3D need a left/right pair
 public:
     void configure(int channels,int bits,int rate) {
         channels_=channels; bits_=bits; baseRate_=rate_=float(rate);
         saturator_.configure();
-        for(int i=0;i<(channels+1)/2;++i) rooms_[i].configure(rate*1.5f);
+        for(int i=0;i<(channels+1)/2;++i) { rooms_[i].configure(rate*1.5f); orbits_[i].configure(rate*1.5f); crossfeeds_[i].configure(rate*1.5f); }
         reset();
     }
     void reset() {
-        saturator_.reset(); for(int i=0;i<(channels_+1)/2;++i) rooms_[i].reset(); lowpass_={};
-        reverb_={}; distortion_={}; muffle_={}; rateRamp_={}; rateRamp_.value=rateRamp_.target=rate_;
-        distortionRunning_=reverbRunning_=muffleRunning_=false; saturationWarmup_=controlCounter_=0; requested_=0;
+        saturator_.reset(); lowpass_={}; shelves_={};
+        for(int i=0;i<(channels_+1)/2;++i) { rooms_[i].reset(); orbits_[i].reset(); crossfeeds_[i].reset(); }
+        reverb_={}; distortion_={}; muffle_={}; bass_={}; pan_={}; spatial_={}; rateRamp_={}; rateRamp_.value=rateRamp_.target=rate_;
+        distortionRunning_=reverbRunning_=muffleRunning_=bassRunning_=panRunning_=spatialRunning_=false;
+        saturationWarmup_=controlCounter_=0; requested_=0;
         distortionBlend_=0;
     }
-    bool wet() const { return reverb_.value!=0 || distortion_.value!=0 || muffle_.value!=0; }
-    bool settled() const { return !reverb_.remaining && !distortion_.remaining && !muffle_.remaining && !rateRamp_.remaining && !saturationWarmup_; }
+    bool wet() const {
+        return reverb_.value!=0 || distortion_.value!=0 || muffle_.value!=0 || bass_.value!=0 || pan_.value!=0 || spatial_.value!=0;
+    }
+    bool settled() const {
+        return !reverb_.remaining && !distortion_.remaining && !muffle_.remaining && !bass_.remaining &&
+            !pan_.remaining && !spatial_.remaining && !rateRamp_.remaining && !saturationWarmup_;
+    }
     int latency() const { return distortionRunning_ ? 32 : 0; }
-    uint32_t accepted() const { return requested_; } // Meaningful only with settled + packet acknowledgement.
+    uint64_t accepted() const { return requested_; } // Meaningful only with settled + packet acknowledgement.
+    // 8D speed 0..100%: one lap every 20 s down to every 4 s.
+    static float lapSeconds(int speed) { return 20*std::pow(.2f,speed/100.f); }
     float muffleCutoff() const { return std::min(20000.f,rate_*.44f)*std::pow(350.f/std::min(20000.f,rate_*.44f),muffle_.value); }
     // Returns whether processing ran. With all amounts zero and ramps finished,
     // the packet is left byte-for-byte untouched, including floating-point values.
-    bool process(uint8_t* bytes,unsigned frames,uint32_t amounts,float effectiveRate,const PitchProcessor& codec) {
+    bool process(uint8_t* bytes,unsigned frames,uint64_t amounts,float effectiveRate,const PitchProcessor& codec) {
         effectiveRate=std::clamp(effectiveRate,baseRate_*.5f,baseRate_*1.5f);
         int ramp=std::max(1,int(effectiveRate*.04f));
-        reverb_.set(float(amounts&255)/100,ramp); distortion_.set(float((amounts>>8)&255)/100,ramp); muffle_.set(float((amounts>>16)&255)/100,ramp);
+        auto amount=[amounts](int index) { return float((amounts>>(8*index))&255)/100; };
+        reverb_.set(amount(0),ramp); distortion_.set(amount(1),ramp); muffle_.set(amount(2),ramp);
+        bass_.set(amount(3),ramp); pan_.set(amount(4),ramp); spatial_.set(amount(6),ramp);
+        if((amounts>>32)&255) lapSeconds_=lapSeconds(int((amounts>>40)&255)); // keep the speed while 8D fades out
         rateRamp_.set(effectiveRate,std::max(1,int(effectiveRate*.12f))); requested_=amounts;
         if (!amounts && !wet()) {
             rate_=effectiveRate; rateRamp_.value=rateRamp_.target=effectiveRate; rateRamp_.remaining=0;
@@ -209,14 +311,22 @@ public:
         if (distortion_.target && !distortionRunning_) { saturator_.reset(); distortionRunning_=true; saturationWarmup_=32; controlCounter_=0; }
         if (reverb_.target && !reverbRunning_) { for(int i=0;i<(channels_+1)/2;++i) rooms_[i].reset(); reverbRunning_=true; controlCounter_=0; }
         if (muffle_.target && !muffleRunning_) { lowpass_={}; muffleRunning_=true; controlCounter_=0; }
+        if (bass_.target && !bassRunning_) { shelves_={}; bassRunning_=true; controlCounter_=0; }
+        if (pan_.target && !panRunning_ && pairs()) { for(int i=0;i<pairs();++i) orbits_[i].reset(); panRunning_=true; controlCounter_=0; }
+        if (spatial_.target && !spatialRunning_ && pairs()) { for(int i=0;i<pairs();++i) crossfeeds_[i].reset(); spatialRunning_=true; controlCounter_=0; }
         for(unsigned n=0;n<frames;++n) {
-            float rev=reverb_.tick(),dist=distortion_.tick(),muf=muffle_.tick(); rate_=rateRamp_.tick();
+            float rev=reverb_.tick(),dist=distortion_.tick(),muf=muffle_.tick(),bass=bass_.tick(),pan=pan_.tick(),space=spatial_.tick();
+            rate_=rateRamp_.tick();
             if(!controlCounter_--) {
                 controlCounter_=15;
                 drive_=std::pow(10.f,dist*24.f/20); compensation_=1/std::sqrt(drive_);
                 dcPole_=std::exp(-2*fx::pi*18/rate_);
                 cutoffG_=std::tan(fx::pi*muffleCutoff()/rate_);
-                if(reverbRunning_) for(int i=0;i<(channels_+1)/2;++i) rooms_[i].tune(rate_,rev);
+                if(reverbRunning_) for(int i=0;i<(channels_+1)/2;++i) rooms_[i].tune(rate_,rev,reverb_.target);
+                // Up to +9 dB below ~90 Hz; trim the whole mix by a third of it for headroom.
+                if(bassRunning_) { for(auto& s:shelves_) s.tune(90,9*bass,rate_); bassTrim_=std::pow(10.f,-3*bass/20); }
+                if(panRunning_) for(int i=0;i<pairs();++i) orbits_[i].tune(pan,lapSeconds_,rate_,16);
+                crossPole_=fx::onePole(700,rate_); crossDelay_=1+.00027f*rate_;
             }
             std::array<float,8> audio{};
             // A separate 15 ms delay crossfade avoids an onset jump after FIR
@@ -231,14 +341,30 @@ public:
                     float shaped=saturator_.process(c,x,drive_,compensation_,.85f*std::sqrt(dist),dcPole_);
                     x+=distortionBlend_*(shaped-x);
                 }
+                if(bassRunning_) x=bassTrim_*shelves_[c].process(x);
                 audio[c]=x;
             }
             if(saturationWarmup_) --saturationWarmup_;
+            // The room hears the song before 8D/3D: the source moves, the hall stays put
+            // and its tail is not crossfed, so it surrounds rather than sits in front.
+            auto source=audio;
+            for(int i=0;i<pairs();++i) {
+                std::array<float,2> pair={audio[2*i],audio[2*i+1]};
+                if(panRunning_) pair=orbits_[i].process(pair[0],pair[1],pan);
+                if(spatialRunning_) pair=crossfeeds_[i].process(pair[0],pair[1],space,crossPole_,crossDelay_);
+                audio[2*i]=pair[0]; audio[2*i+1]=pair[1];
+            }
             if(reverbRunning_) for(int c=0;c<channels_;c+=2) {
-                auto room=rooms_[c/2].process(audio[c],audio[std::min(c+1,channels_-1)]);
+                auto room=rooms_[c/2].process(source[c],source[std::min(c+1,channels_-1)]);
                 float mix=.55f*rev;
-                audio[c]=audio[c]*(1-mix)+room[0]*mix;
-                if(c+1<channels_) audio[c+1]=audio[c+1]*(1-mix)+room[1]*mix;
+                if(c+1<channels_) {
+                    // Spread the tail beyond the speakers and set the song slightly
+                    // wider, both growing with the amount (mid/side, mono-safe sum).
+                    float wetMid=(room[0]+room[1])*.5f*(1-.25f*rev), wetSide=(room[0]-room[1])*.5f*(1+.8f*rev);
+                    float dryMid=(audio[c]+audio[c+1])*.5f, drySide=(audio[c]-audio[c+1])*.5f*(1+.35f*rev);
+                    audio[c]=(dryMid+drySide)*(1-mix)+(wetMid+wetSide)*mix;
+                    audio[c+1]=(dryMid-drySide)*(1-mix)+(wetMid-wetSide)*mix;
+                } else audio[c]=audio[c]*(1-mix)+room[0]*mix;
             }
             for(int c=0;c<channels_;++c) {
                 float x=audio[c];
@@ -251,14 +377,17 @@ public:
                 float magnitude=std::abs(x);
                 if(magnitude>.94f) {
                     float protectedSample=std::copysign(.94f+.06f*std::tanh((magnitude-.94f)/.06f),x);
-                    x+=std::min(1.f,std::max({rev,dist,muf})/.05f)*(protectedSample-x);
+                    x+=std::min(1.f,std::max({rev,dist,muf,bass,pan,space})/.05f)*(protectedSample-x);
                 }
-                if(rev || dist || muf) codec.encode(sample+c*(bits_/8),x);
+                if(rev || dist || muf || bass || pan || space) codec.encode(sample+c*(bits_/8),x);
             }
         }
         if(!distortion_.value && !distortion_.target) distortionRunning_=false;
         if(!reverb_.value && !reverb_.target) reverbRunning_=false;
         if(!muffle_.value && !muffle_.target) muffleRunning_=false;
+        if(!bass_.value && !bass_.target) bassRunning_=false;
+        if(!pan_.value && !pan_.target) panRunning_=false;
+        if(!spatial_.value && !spatial_.target) spatialRunning_=false;
         return true;
     }
 };

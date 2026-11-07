@@ -36,10 +36,11 @@ def main():
     ap.add_argument("--guid", action="append", default=[], help="Find a GUID's little-endian bytes")
     ap.add_argument("--size", type=number, help="explicit disassembly byte length")
     ap.add_argument("--out", type=Path)
+    ap.add_argument("--expect", default=EXPECTED, help="expected SHA-256 of --binary")
     args = ap.parse_args()
     data = args.binary.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
-    if digest != EXPECTED:
+    if digest != args.expect.lower():
         raise SystemExit("Target SHA-256 differs: " + digest)
     pe = pefile.PE(data=data, fast_load=True)
     pe.parse_data_directories(directories=[

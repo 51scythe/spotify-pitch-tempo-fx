@@ -47,7 +47,26 @@ try {
     & $spice config extensions pitch-tempo.js
     if ($LASTEXITCODE) { throw 'Extension configuration failed.' }
     if (!$NoApply) {
-        if (Test-Path -LiteralPath "$spiceConfig\Backup\xpui.spa") { & $spice apply -n }
+        # After a Spotify update, Apps holds new stock .spa files beside the previous
+        # build's patched folders, and Spicetify's backup is for the old version.
+        # Move the stale folders into this run's backup, then back up the new build.
+        $prefsVersion = ''
+        $prefsLine = Select-String -LiteralPath "$env:APPDATA\Spotify\prefs" -Pattern '^app\.last-launched-version="([^"]+)"' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($prefsLine) { $prefsVersion = $prefsLine.Matches[0].Groups[1].Value }
+        $backupVersion = ''
+        if (Test-Path -LiteralPath $config) {
+            $backupLine = Select-String -LiteralPath $config -Pattern '^\s*version\s*=\s*(\S+)' | Select-Object -Last 1
+            if ($backupLine) { $backupVersion = $backupLine.Matches[0].Groups[1].Value }
+        }
+        $updated = $prefsVersion -and $backupVersion -and $prefsVersion -ne $backupVersion
+        if ($updated -and (Test-Path -LiteralPath "$env:APPDATA\Spotify\Apps\xpui.spa")) {
+            New-Item -ItemType Directory -Path "$backup\stale-apps" -Force | Out-Null
+            Get-ChildItem -LiteralPath "$env:APPDATA\Spotify\Apps" -Directory | ForEach-Object {
+                Move-Item -LiteralPath $_.FullName -Destination "$backup\stale-apps\$($_.Name)"
+            }
+            Write-Output "Spotify updated ($backupVersion -> $prefsVersion); stale UI folders moved to $backup\stale-apps"
+        }
+        if (!$updated -and (Test-Path -LiteralPath "$spiceConfig\Backup\xpui.spa")) { & $spice apply -n }
         else { & $spice backup apply -n }
         if ($LASTEXITCODE) { throw 'Spicetify apply failed.' }
     }

@@ -35,11 +35,11 @@ HANDLE mapping = nullptr;
 uintptr_t spotifyBase = 0;
 
 // The launcher verifies Spotify.dll's SHA-256 before injection. These are the
-// traced native playback renderer's initialization bounds for 1.3.6.1921 only.
+// traced native playback renderer's initialization bounds for 1.3.8.620 only.
 // Capture, loopback, CEF and exclusive clients are never retained or modified.
 bool nativeRenderer(void* caller) {
     uintptr_t rva = uintptr_t(caller) - spotifyBase;
-    return spotifyBase && rva >= 0xdc1fa8 && rva < 0xdc3cac;
+    return spotifyBase && rva >= 0x1081b6c && rva < 0x1083870;
 }
 struct Counters {
     std::atomic<LONG> frames{0}, buffers{0}, silentBuffers{0}, errors{0};
@@ -61,21 +61,23 @@ struct Stream {
     std::atomic<bool> active{false}, reset{false}, fault{false};
     // Factor (float bit representation) and command generation published together.
     std::atomic<uint64_t> command{0};
-    std::atomic<uint64_t> effectsCommand{0};
+    std::atomic<uint64_t> effectsCommand{0}; // packed amounts (control.h effectAmounts)
+    std::atomic<uint32_t> rateCommand{0};    // effective stream rate, float bits
     std::atomic<uint32_t> commandSequence{0};
     uint64_t audioCommand=0,audioEffectsCommand=0; // audio-thread last coherent mailbox
+    uint32_t audioRateCommand=0;
     std::atomic<LONG> dspSequence{-1};
     std::atomic<double> acceptedFactor{1};
     std::atomic<bool> transitioning{false}, wet{false};
     std::atomic<bool> effectsWet{false};
-    std::atomic<uint32_t> acceptedEffects{0};
+    std::atomic<uint64_t> acceptedEffects{0};
     std::atomic<LONG> effectsLatency{0},effectsFrames{0};
     std::atomic<uint32_t> packetSequence{0};
     struct PacketSnapshot {
         LONG generation=-1,latency=0,frames=0;
         double factor=1;
         bool transitioning=false,wet=false,effectsWet=false;
-        uint32_t effects=0;
+        uint64_t effects=0;
     } acknowledged; // worker-owned last complete, successfully submitted packet
     std::atomic<LONG> packetError{0};
     double appliedTempo = 1; // worker-owned, only updated on successful API return
@@ -83,6 +85,12 @@ struct Stream {
     BYTE* buffer = nullptr; // GetBuffer/ReleaseBuffer pair is owned by one audio thread
     UINT32 requestedFrames = 0;
     bool wasSilent = false;
+    // Source starvation: a short digital-zero run between audible frames. Spotify
+    // zero-fills an underrun without AUDCLNT_BUFFERFLAGS_SILENT.
+    std::atomic<LONG> gaps{0};
+    std::atomic<bool> gapReset{false};
+    UINT32 zeroRun = 0; bool heardAudio = false; // audio-thread owned
+    LONG seenGaps = 0; // worker owned
 };
 // Bounded process-lifetime ownership. No real-time locks, allocations or reclaim
 // races. A ninth distinct render client stays untouched and reports restart needed.
@@ -221,13 +229,25 @@ HRESULT STDMETHODCALLTYPE startHook(IAudioClient* client) {
 }
 HRESULT STDMETHODCALLTYPE stopHook(IAudioClient* client) {
     HRESULT hr = originalStop(client);
-    if (auto* s = findStream(client)) { counters.stopCalls++; if (SUCCEEDED(hr)) s->active = false; else s->packetError = hr; }
+    if (auto* s = findStream(client)) { counters.stopCalls++; s->gapReset = true; if (SUCCEEDED(hr)) s->active = false; else s->packetError = hr; }
     return hr;
 }
 HRESULT STDMETHODCALLTYPE resetHook(IAudioClient* client) {
     HRESULT hr = originalReset(client);
-    if (auto* s = findStream(client)) { counters.resetCalls++; if (SUCCEEDED(hr)) s->reset = true; else s->packetError = hr; }
+    if (auto* s = findStream(client)) { counters.resetCalls++; s->gapReset = true; if (SUCCEEDED(hr)) s->reset = true; else s->packetError = hr; }
     return hr;
+}
+// Music practically never holds exact zero on every channel for 64+ frames
+// except in a real underrun, a pause or a track gap (the latter two run >= 0.5 s).
+constexpr UINT32 kGapMinFrames = 64;
+void scanSource(Stream* s, const BYTE* p, UINT32 frames) noexcept {
+    for (UINT32 i = 0; i < frames; ++i, p += s->blockAlign) {
+        bool zero = true;
+        for (WORD b = 0; b < s->blockAlign; ++b) if (p[b]) { zero = false; break; }
+        if (zero) { if (s->heardAudio) ++s->zeroRun; continue; }
+        if (s->zeroRun >= kGapMinFrames && s->zeroRun < s->rate/2) s->gaps++;
+        s->zeroRun = 0; s->heardAudio = true;
+    }
 }
 HRESULT STDMETHODCALLTYPE getBufferHook(IAudioRenderClient* client, UINT32 frames, BYTE** out) {
     HRESULT hr = originalGetBuffer(client, frames, out);
@@ -241,8 +261,8 @@ HRESULT STDMETHODCALLTYPE releaseBufferHook(IAudioRenderClient* client, UINT32 f
     auto* s = findRenderer(client);
     if(s) for(int attempt=0;attempt<4;++attempt) {
         uint32_t seq=s->commandSequence.load(); if(seq&1) continue;
-        uint64_t command=s->command.load(),effects=s->effectsCommand.load();
-        if(seq==s->commandSequence.load()) { s->audioCommand=command; s->audioEffectsCommand=effects; break; }
+        uint64_t command=s->command.load(),effects=s->effectsCommand.load(); uint32_t rate=s->rateCommand.load();
+        if(seq==s->commandSequence.load()) { s->audioCommand=command; s->audioEffectsCommand=effects; s->audioRateCommand=rate; break; }
     }
     uint64_t command = s ? s->audioCommand : 0;
     bool effectsProcessed=false;
@@ -251,12 +271,14 @@ HRESULT STDMETHODCALLTYPE releaseBufferHook(IAudioRenderClient* client, UINT32 f
         try {
             uint32_t bits = uint32_t(command); float factor; memcpy(&factor, &bits, 4);
             if (!std::isfinite(factor) || factor <= 0) factor = 1;
-            uint32_t amounts=uint32_t(s->audioEffectsCommand);
-            uint32_t rateBits=uint32_t(s->audioEffectsCommand>>32); float effectiveRate;
-            memcpy(&effectiveRate,&rateBits,4);
+            uint64_t amounts=s->audioEffectsCommand;
+            float effectiveRate; memcpy(&effectiveRate,&s->audioRateCommand,4);
             if(!std::isfinite(effectiveRate) || effectiveRate<=0) effectiveRate=float(s->rate);
             if (s->formatOK && s->reset.exchange(false)) { s->dsp.reset(); s->effects.reset(); }
             if (sourceSilent && s->formatOK && !s->wasSilent) s->dsp.reset();
+            if (s->gapReset.exchange(false)) { s->zeroRun = 0; s->heardAudio = false; }
+            if (sourceSilent) { if (s->heardAudio) s->zeroRun += frames; }
+            else if (s->formatOK && s->buffer && frames <= s->requestedFrames) scanSource(s, s->buffer, frames);
             if (s->formatOK && !s->fault && s->buffer && frames <= s->requestedFrames) {
                 size_t bytes = size_t(frames)*s->blockAlign;
                 if (bytes > s->scratch.size()) throw std::bad_alloc();
@@ -296,6 +318,15 @@ HRESULT STDMETHODCALLTYPE releaseBufferHook(IAudioRenderClient* client, UINT32 f
     }
     return hr;
 }
+// Spotify's source supplies at most ~1.13-1.16x real time (reports/
+// metallic-audio-investigation-20261030.md, refill-timer-fix-20261031.md). A faster
+// stream clock drains its 1 s queue and playback alternates audio with gaps, which
+// sounds robotic. Hold the clock at a sustainable ceiling. On a starvation gap,
+// play at unity long enough for the queue to refill, then resume one step lower;
+// creep back after quiet minutes. Pitch DSP keeps the requested pitch, so only
+// speed is limited.
+constexpr double kCeilingStart = 1.20, kCeilingFloor = 1.04, kCeilingStep = .02, kCeilingRecover = .01;
+constexpr DWORD kRefillMs = 8000, kRecoverAfterMs = 180000;
 bool queueHook(void* address, void* detour, void** original) {
     MH_STATUS status = MH_CreateHook(address, detour, original);
     if (status == MH_OK) status = MH_QueueEnableHook(address);
@@ -354,7 +385,14 @@ DWORD WINAPI worker(void*) {
     if (!installHooks()) { CoUninitialize(); return 6; }
     shared->attached = 1;
     Settings c; LONG generation = 0;
+    double ceiling = kCeilingStart;
+    DWORD lastCeilingChange = GetTickCount(), lastGap = lastCeilingChange, refillUntil = lastCeilingChange;
     for (;;) {
+        DWORD now = GetTickCount();
+        bool refilling = LONG(now - refillUntil) < 0;
+        if (ceiling < kCeilingStart && now - lastGap > kRecoverAfterMs && now - lastCeilingChange > kRecoverAfterMs) {
+            ceiling = std::min(kCeilingStart, ceiling + kCeilingRecover); lastCeilingChange = now;
+        }
         c = readSettings(shared, c, &generation);
         bool alive = DWORD(GetTickCount() - DWORD(shared->heartbeat)) < 2000;
         Settings requested = c;
@@ -372,7 +410,17 @@ DWORD WINAPI worker(void*) {
                     if (FAILED(hr)) s->clockError = hr;
                 }
             }
-            double rate = requested.enabled && !s->fault ? requested.tempo/1000.0 : 1.0;
+            LONG gaps = s->gaps.load();
+            if (gaps != s->seenGaps) {
+                s->seenGaps = gaps;
+                if (s->appliedTempo > 1.000001) {
+                    ceiling = std::max(kCeilingFloor, std::min(ceiling, s->appliedTempo) - kCeilingStep);
+                    lastGap = lastCeilingChange = now;
+                    refillUntil = now + kRefillMs; refilling = true;
+                }
+            }
+            double limit = refilling ? 1.0 : ceiling;
+            double rate = requested.enabled && !s->fault ? std::min(requested.tempo/1000.0, limit) : 1.0;
             if (!requested.linked && !s->formatOK) rate = 1;
             if (std::abs(rate - s->appliedTempo) > .000001 && s->clock) {
                 HRESULT hr = s->clock->SetSampleRate(float(s->rate*rate));
@@ -382,12 +430,11 @@ DWORD WINAPI worker(void*) {
             double factor = s->formatOK && !s->fault ? pitchFactor(requested, s->appliedTempo) : 1;
             float f = float(factor); uint32_t bits; memcpy(&bits, &f, 4);
             uint64_t command = (uint64_t(uint32_t(generation)) << 32) | bits;
-            uint32_t amounts=s->formatOK && !s->fault ? effectAmounts(requested) : 0;
+            uint64_t amounts=s->formatOK && !s->fault ? effectAmounts(requested) : 0;
             float effectiveRate=float(s->rate*s->appliedTempo); uint32_t rateBits; memcpy(&rateBits,&effectiveRate,4);
-            uint64_t effects=(uint64_t(rateBits)<<32)|amounts;
-            if(s->command.load()!=command || s->effectsCommand.load()!=effects) {
+            if(s->command.load()!=command || s->effectsCommand.load()!=amounts || s->rateCommand.load()!=rateBits) {
                 s->commandSequence.fetch_add(1);
-                s->effectsCommand=effects; s->command=command;
+                s->effectsCommand=amounts; s->rateCommand=rateBits; s->command=command;
                 s->commandSequence.fetch_add(1);
             }
             for(int attempt=0;attempt<4;++attempt) {
@@ -406,8 +453,8 @@ DWORD WINAPI worker(void*) {
             bypassed &= LONG(dry);
             if (s->active) {
                 ++active; selected = s;
-                double targetRate = requested.enabled ? requested.tempo/1000.0 : 1;
-                double targetPitch = requested.enabled ? (requested.linked ? 1200*std::log2(targetRate) : requested.pitch) : 0;
+                double targetRate = requested.enabled ? std::min(requested.tempo/1000.0, limit) : 1;
+                double targetPitch = requested.enabled ? (requested.linked ? 1200*std::log2(requested.tempo/1000.0) : requested.pitch) : 0;
                 double actualPitch = 1200*std::log2(s->appliedTempo*actualFactor);
                 bool applied = !waiting && !s->fault && ack.effects==effectAmounts(requested) &&
                     std::abs(targetRate-s->appliedTempo) < .000001 && std::abs(targetPitch-actualPitch) < .1;
@@ -435,8 +482,10 @@ DWORD WINAPI worker(void*) {
             const auto& ack=selected->acknowledged;
             shared->appliedPitch = LONG(std::lround(1200*std::log2(selected->appliedTempo*ack.factor)));
             shared->dspLatency = ack.wet ? selected->latency : 0;
-            uint32_t amounts=ack.effects;
-            shared->appliedReverb=amounts&255; shared->appliedDistortion=(amounts>>8)&255; shared->appliedMuffle=(amounts>>16)&255;
+            uint64_t amounts=ack.effects;
+            shared->appliedReverb=effectByte(amounts,0); shared->appliedDistortion=effectByte(amounts,1); shared->appliedMuffle=effectByte(amounts,2);
+            shared->appliedBass=effectByte(amounts,3); shared->appliedPan=effectByte(amounts,4);
+            shared->appliedPanSpeed=effectByte(amounts,5); shared->appliedSpatial=effectByte(amounts,6);
             shared->fxLatency=ack.latency; shared->fxFrames=ack.frames;
         }
         InterlockedIncrement(&shared->telemetrySequence);

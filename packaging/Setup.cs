@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -98,7 +98,7 @@ internal sealed class SetupWindow : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         layout.Controls.Add(new Label { Text = "Pitch, Tempo & FX", UseMnemonic = false, Font = new Font("Segoe UI", 23, FontStyle.Bold), Dock = DockStyle.Fill }, 0, 0);
-        layout.Controls.Add(new Label { Text = "Reverb, distortion, muffle, independent pitch and tempo.\r\nRequires Windows x64 + desktop Spotify 1.3.6.1921.\r\nQuit Spotify completely before Install / Repair or Remove.", Dock = DockStyle.Fill }, 0, 1);
+        layout.Controls.Add(new Label { Text = "Reverb, distortion, muffle, bass, 8D, headphone 3D, pitch and tempo.\r\nRequires Windows x64 + desktop Spotify 1.3.8.620.\r\nQuit Spotify completely before Install / Repair or Remove.", Dock = DockStyle.Fill }, 0, 1);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
         Configure(check, "Check compatibility", 175);
         Configure(install, "Install / Repair", 160);

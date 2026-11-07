@@ -35,9 +35,11 @@ inline bool parseSettings(const std::string& body, Settings& out) {
         if(r.ec!=std::errc{} || r.ptr!=body.data()+end || !values.emplace(key,value).second)return false;
         pos=end+1;
     }
-    if(values.size()!=7 || !values.count("tempo") || !values.count("pitch") || !values.count("linked") || !values.count("enabled") ||
-        !values.count("reverb") || !values.count("distortion") || !values.count("muffle")) return false;
-    out={values["tempo"],values["pitch"],values["linked"],values["enabled"],values["reverb"],values["distortion"],values["muffle"]};
+    static const char* keys[]={"tempo","pitch","linked","enabled","reverb","distortion","muffle","bass","pan","panSpeed","spatial"};
+    if(values.size()!=std::size(keys)) return false;
+    for(const char* key:keys) if(!values.count(key)) return false;
+    out={values["tempo"],values["pitch"],values["linked"],values["enabled"],values["reverb"],values["distortion"],values["muffle"],
+        values["bass"],values["pan"],values["panSpeed"],values["spatial"]};
     return validSettings(out);
 }
 inline void startBridge(HWND owner, const std::wstring& tokenPath) {
